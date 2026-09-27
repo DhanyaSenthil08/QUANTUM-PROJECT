@@ -2,12 +2,44 @@
 
 A precision-oncology console: doctors upload a patient dataset, the backend runs
 a Qiskit quantum feature analysis alongside a scikit-learn drug-response model,
-and the results come back as a styled dashboard.
+and per patient can pull a live, evidence-ranked list of real drugs targeting
+their recorded gene mutation for their cancer type.
 
 - **Backend**: Flask, SQLAlchemy + Alembic, JWT auth, Qiskit, scikit-learn
 - **Frontend**: React 19 + Vite, React Router, a glassmorphic/neumorphic UI
 
 ---
+
+## Genomic drug recommendations (`/api/recommend`)
+
+Given a gene symbol and cancer type, `backend/genomics.py` queries the
+[Open Targets Platform](https://platform.opentargets.org/) GraphQL API live —
+nothing here is a static or fabricated dataset. It resolves the gene to a
+target ID, pulls every drug in clinical development or approved against that
+target, filters to the ones with documented evidence in the given cancer
+type, and ranks them by clinical stage (approved > phase 3 > ... ). Results
+are cached per gene in the `genomics_cache` table for 24h so repeat lookups
+are instant and don't hammer the public API.
+
+**This intentionally does not fabricate a result when there isn't one.**
+Tumor-suppressor genes like BRCA1/BRCA2 correctly come back with zero direct
+matches — they aren't drug targets themselves, the real clinical intervention
+(PARP inhibitors) works through a different target via synthetic lethality.
+The UI explains this rather than hiding it or inventing a fake match. If you
+want to extend this to also surface indirect/synthetic-lethality relationships,
+that needs a second, separate evidence source — it's not something the
+direct target→drug lookup can honestly produce.
+
+---
+
+## For a team: use Docker
+
+If more than one person is running this, **use the Docker path below, not the
+manual one.** Docker pins the exact OS, Python, and Node versions inside the
+images, so everyone gets byte-for-byte the same environment regardless of
+what's installed on their laptop. The manual path is fine for solo quick
+edits, but "works on my machine" bugs almost always come from Python/Node
+version drift between contributors — Docker removes that variable entirely.
 
 ## Quick start (Docker)
 
@@ -32,6 +64,13 @@ To stop: `docker compose down`. To wipe the database too: `docker compose down -
 ---
 
 ## Local development (without Docker)
+
+Use the same versions as CI/Docker so behavior matches across every
+contributor's machine: **Python 3.12** (pinned in `backend/.python-version`)
+and **Node 22** (pinned in `frontend-app/.nvmrc` / `package.json engines` —
+`npm install` will refuse to run on the wrong Node version). If you use
+`pyenv`/`nvm`, running `pyenv install` / `nvm use` in each folder picks up
+the pinned version automatically.
 
 ### Backend
 
@@ -96,6 +135,7 @@ starts serving traffic (the Docker image's entrypoint does this automatically).
 | `FRONTEND_ORIGIN` | Allowed CORS origin | `http://localhost:5173` |
 | `FLASK_DEBUG` | Enables the Werkzeug debugger/reloader | `false` |
 | `LOG_LEVEL` | Python logging level | `INFO` |
+| `SEED_DEMO_USERS` | Seeds `doctor@gmail.com`/`admin@gmail.com` demo accounts on startup | `true` — **set to `false` in any real deployment** |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM` | Outbound email for password resets | unset — reset emails are logged to stdout instead of sent |
 
 ### Frontend (`frontend-app/.env`, see `frontend-app/.env.example`)
@@ -124,6 +164,9 @@ wherever you land:
    "Data handling" below). You only need a volume for Postgres itself.
 3. **`SECRET_KEY`** as a real secret in your host's secret manager, not
    committed anywhere.
+4. **`SEED_DEMO_USERS=false`.** Without this, the app seeds
+   `doctor@gmail.com`/`password123` and `admin@gmail.com`/`adminpass123`
+   — publicly known credentials — against your real database.
 
 The backend serves via `waitress` (cross-platform, no `debug=True` Werkzeug
 server in the request path). Flask-Limiter's rate limiter currently uses
